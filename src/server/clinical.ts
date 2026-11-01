@@ -175,9 +175,10 @@ export async function updatePatient(actor: Actor, patientId: string, input: {
 }
 
 export async function savePatientPhoto(actor: Actor, patientId: string, relativePath: string) {
-  const { error } = await supabaseAdmin().from("patients").update({ photo_path: relativePath })
-    .eq("organization_id", actor.organizationId).eq("id", patientId);
+  const { data, error } = await supabaseAdmin().from("patients").update({ photo_path: relativePath })
+    .eq("organization_id", actor.organizationId).eq("id", patientId).select("id").maybeSingle();
   throwDatabaseError(error);
+  if (!data) throw new Error("Patient not found.");
   await writeAudit({
     ...org(actor), userId: actor.id, action: "PATIENT_EDITED", entity: "Patient", entityId: patientId, details: { photo: true },
   });

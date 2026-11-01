@@ -2,9 +2,6 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import fs from "fs";
-import path from "path";
-import { dataRoot, ensureDataDirs } from "@/lib/files";
 import { hashPin, isFourDigitPin, verifyPin } from "@/lib/pin";
 import { verifyPassword } from "@/lib/password";
 import { id } from "@/lib/ids";
@@ -49,7 +46,7 @@ import { checkSupabaseConnection } from "./sync";
 import { appUrl } from "@/lib/app-url";
 import { getPaynow } from "@/lib/paynow";
 import { hashVoucherCode, isValidVoucherCode, normalizeVoucherCode } from "@/lib/vouchers";
-import { removeClinicLogo, uploadClinicLogo } from "@/lib/supabase-storage";
+import { removeClinicLogo, uploadClinicLogo, uploadPatientPhoto } from "@/lib/supabase-storage";
 import { createRegistrationIntent, deleteRegistrationIntent, updateRegistrationIntentPollUrl } from "./billing-db";
 
 const attempts = new Map<string, { count: number; until: number }>();
@@ -477,11 +474,12 @@ export async function uploadPhotoAction(formData: FormData) {
   const file = formData.get("photo");
   if (!(file instanceof File) || file.size === 0) return { ok: false as const, error: "Choose a photo." };
   if (file.size > 4_000_000) return { ok: false as const, error: "Use a photo under 4 MB." };
-  const ext = file.type.includes("png") ? "png" : file.type.includes("webp") ? "webp" : "jpg";
-  ensureDataDirs();
-  const relative = `images/patients/${patientId}.${ext}`;
-  fs.writeFileSync(path.join(dataRoot, relative), Buffer.from(await file.arrayBuffer()));
-  await savePatientPhoto(user, patientId, relative);
+  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+    return { ok: false as const, error: "Choose a PNG, JPEG, or WebP photo." };
+  }
+  if (!/^[0-9a-f-]{36}$/i.test(patientId)) return { ok: false as const, error: "Choose a valid patient." };
+  const objectPath = await uploadPatientPhoto(user.organizationId, patientId, file);
+  await savePatientPhoto(user, patientId, objectPath);
   revalidatePath(`/patients/${patientId}`);
   return { ok: true as const };
 }

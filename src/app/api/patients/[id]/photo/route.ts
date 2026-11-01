@@ -1,9 +1,7 @@
-import fs from "fs";
-import path from "path";
 import { NextResponse } from "next/server";
-import { dataRoot } from "@/lib/files";
 import { getSession } from "@/lib/session";
 import { fromDatabase, supabaseAdmin, throwDatabaseError } from "@/lib/supabase-admin";
+import { downloadPatientPhoto } from "@/lib/supabase-storage";
 
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
   const session = await getSession();
@@ -22,10 +20,19 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     .eq("organization_id", session.organizationId).eq("id", id).maybeSingle();
   throwDatabaseError(patientError);
   const patient = patientData ? fromDatabase<{ photoPath: string | null }>(patientData) : null;
-  if (!patient?.photoPath) return new NextResponse("No photo", { status: 404 });
-  const file = path.join(dataRoot, patient.photoPath);
-  if (!file.startsWith(dataRoot) || !fs.existsSync(file)) return new NextResponse("No photo", { status: 404 });
-  const ext = path.extname(file).toLowerCase();
-  const type = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
-  return new NextResponse(fs.readFileSync(file), { headers: { "Content-Type": type, "Cache-Control": "private, max-age=3600" } });
+  const expectedPrefix = `${session.organizationId}/${id}/`;
+  if (!patient?.photoPath || !patient.photoPath.startsWith(expectedPrefix)) {
+    return new NextResponse("No photo", { status: 404 });
+  }
+  const { data, error } = await downloadPatientPhoto(patient.photoPath);
+  if (error) {
+    if (error.statusCode === "404") return new NextResponse("No photo", { status: 404 });
+    throw new Error(`Could not load patient photo: ${error.message}`);
+  }
+  return new NextResponse(data, {
+    headers: {
+      "Content-Type": data.type || "application/octet-stream",
+      "Cache-Control": "private, max-age=3600",
+    },
+  });
 }
