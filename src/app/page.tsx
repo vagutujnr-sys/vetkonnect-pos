@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight, Boxes, ClipboardPlus, CreditCard, PawPrint, Pill, ShieldCheck, Stethoscope } from "lucide-react";
+import { LandingHeader } from "@/components/LandingHeader";
 
 const features = [
   { Icon: PawPrint, title: "Patient records", description: "Keep owners, pets, clinical history and follow-ups connected." },
@@ -14,19 +15,7 @@ const features = [
 export default function LandingPage() {
   return (
     <main className="saas-site">
-      <header className="saas-header">
-        <Link className="saas-brand" href="/" aria-label="VetKonnect home">
-          <Image src="/vetkonnect-logo.png" alt="" width={46} height={46} priority />
-          <span>VetKonnect <b>P.O.S &amp; Management</b></span>
-        </Link>
-        <nav aria-label="Main navigation">
-          <a href="#platform">Platform</a>
-          <a href="#pricing">Pricing</a>
-          <Link href="/register">Practice sign in</Link>
-          <Link href="/platform/login">Platform admin</Link>
-          <Link className="saas-nav-cta" href="/register">Create your practice <ArrowRight size={16} /></Link>
-        </nav>
-      </header>
+      <LandingHeader />
 
       <section className="saas-hero">
         <div className="saas-hero-copy">

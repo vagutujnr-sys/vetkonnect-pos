@@ -13,7 +13,7 @@ export default async function ReceiptPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ format?: string }>;
+  searchParams: Promise<{ format?: string; auto?: string }>;
 }) {
   const { id } = await params;
   const query = await searchParams;
@@ -25,7 +25,7 @@ export default async function ReceiptPage({
   throwDatabaseError(saleError);
   if (!saleData) notFound();
   const sale = fromDatabase<{
-    id: string; receiptNumber: string; staffId: string; patientId: string | null;
+    id: string; receiptNumber: string; staffId: string; patientId: string | null; ownerId: string | null;
     createdAt: Date; total: number; status: string;
   }>(saleData);
   const [settings, itemsResult, paymentsResult, staffResult, patientResult] = await Promise.all([
@@ -39,17 +39,13 @@ export default async function ReceiptPage({
   const items = fromDatabase<{ id: string; name: string; quantity: number; lineTotal: number }[]>(itemsResult.data ?? []);
   const payments = fromDatabase<{ method: string; received: number | null; changeGiven: number | null; reference: string | null }[]>(paymentsResult.data ?? []);
   const staff = staffResult.data ? fromDatabase<{ name: string }>(staffResult.data) : null;
-  const patientRow = patientResult.data ? fromDatabase<{ id: string; name: string; ownerId: string }>(patientResult.data) : null;
-  let patient: { name: string; owner: { fullName: string } } | null = null;
-  if (patientRow) {
-    const { data, error } = await client.from("owners").select("full_name")
-      .eq("organization_id", session.organizationId).eq("id", patientRow.ownerId).maybeSingle();
-    throwDatabaseError(error);
-    if (data) {
-      const owner = fromDatabase<{ fullName: string }>(data);
-      patient = { name: patientRow.name, owner };
-    }
-  }
+  const patientRow = patientResult.data ? fromDatabase<{ id: string; name: string; ownerId: string | null }>(patientResult.data) : null;
+  const ownerId = sale.ownerId ?? patientRow?.ownerId ?? null;
+  const ownerResult = ownerId
+    ? await client.from("owners").select("full_name").eq("organization_id", session.organizationId).eq("id", ownerId).maybeSingle()
+    : { data: null, error: null };
+  throwDatabaseError(ownerResult.error);
+  const owner = ownerResult.data ? fromDatabase<{ fullName: string }>(ownerResult.data) : null;
   const symbol = settings?.currencySymbol ?? "$";
   const payment = payments[0];
   const a4 = query.format === "a4";
@@ -57,7 +53,7 @@ export default async function ReceiptPage({
     <div>
       <div className="receipt-actions no-print">
         <Link className="btn btn-quiet" href="/pos"><ArrowLeft size={18} aria-hidden="true" />Back to POS</Link>
-        <PrintButton kind="receipt" entityId={sale.id} />
+        <PrintButton kind="receipt" entityId={sale.id} auto={query.auto === "1"} />
         <Link className="receipt-format-link" href={a4 ? `/receipts/${sale.id}` : `/receipts/${sale.id}?format=a4`}>{a4 ? "Thermal receipt" : "A4 receipt"}</Link>
         {!a4 ? <p className="receipt-printer-hint">Choose your paired 58 mm printer in the device print dialog.</p> : null}
       </div>
@@ -66,7 +62,7 @@ export default async function ReceiptPage({
         <h1 className="center" style={{ fontSize: a4 ? "1.4rem" : "1rem" }}>{settings?.clinicName}</h1>
         <p className="center">{settings?.address}{settings?.phone ? ` · ${settings.phone}` : ""}</p>
         <p>{sale.receiptNumber}<br />{formatDateTime(sale.createdAt)}</p>
-        {patient ? <p>{patient.owner.fullName}<br />{patient.name}</p> : null}
+        {owner || patientRow ? <p>{owner ? <>Client: {owner.fullName}</> : null}{patientRow ? <><br />Patient: {patientRow.name}</> : null}</p> : null}
         <hr />
         {items.map((item) => (
           <div className="split" key={item.id}>

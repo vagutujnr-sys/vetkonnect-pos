@@ -13,7 +13,9 @@ import { actor } from "./actor";
 import {
   backupDatabase,
   removeDemoData,
+  removeInventoryCategory,
   saveMedication,
+  saveInventoryCategory,
   savePrinter,
   saveProduct,
   saveService,
@@ -76,6 +78,14 @@ function num(formData: FormData, key: string) {
   if (!value) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function redirectToPos(panel: string, error?: string): never {
+  revalidatePath("/pos");
+  const query = error
+    ? `error=${encodeURIComponent(error)}`
+    : "saved=1";
+  redirect(`/pos?panel=${panel}&${query}`);
 }
 
 export async function loginWithPin(pin: string, practiceCode: string) {
@@ -434,7 +444,7 @@ export async function createPatientAction(formData: FormData) {
   const user = await actor();
   const ownerId = text(formData, "ownerId");
   try {
-    const patient = await createPatient(user, {
+    await createPatient(user, {
       ownerId: ownerId || undefined,
       owner: ownerId
         ? undefined
@@ -460,10 +470,10 @@ export async function createPatientAction(formData: FormData) {
       clinicalAlerts: text(formData, "clinicalAlerts"),
       notes: text(formData, "notes"),
     });
-    redirect(`/patients/${patient.id}`);
+    redirectToPos("patients");
   } catch (error) {
     bubble(error);
-    redirect(`/patients/new?error=${encodeURIComponent(error instanceof Error ? error.message : "Could not save")}`);
+    redirectToPos("patients", error instanceof Error ? error.message : "Could not save");
   }
 }
 
@@ -636,6 +646,7 @@ export async function payVisitAction(input: {
 }
 
 export async function checkoutAction(input: {
+  ownerId?: string;
   patientId?: string;
   lines: {
     itemType: "SERVICE" | "MEDICATION" | "PRODUCT" | "CUSTOM";
@@ -680,12 +691,23 @@ export async function checkoutAction(input: {
       })),
     ];
     let patient: { id: string; ownerId: string | null } | null = null;
+    let ownerId: string | null = input.ownerId || null;
     if (input.patientId) {
       const { data: patientData, error: patientError } = await supabaseAdmin().from("patients")
         .select("id,owner_id").eq("id", input.patientId).eq("organization_id", user.organizationId).maybeSingle();
       throwDatabaseError(patientError);
       patient = patientData ? fromDatabase<{ id: string; ownerId: string | null }>(patientData) : null;
       if (!patient) return { ok: false as const, error: "That patient is no longer available." };
+      if (ownerId && patient.ownerId && ownerId !== patient.ownerId) {
+        return { ok: false as const, error: "The selected client does not own this patient." };
+      }
+      ownerId = patient.ownerId ?? ownerId;
+    }
+    if (ownerId) {
+      const { data: owner, error: ownerError } = await supabaseAdmin().from("owners").select("id")
+        .eq("id", ownerId).eq("organization_id", user.organizationId).maybeSingle();
+      throwDatabaseError(ownerError);
+      if (!owner) return { ok: false as const, error: "That client is no longer available." };
     }
     const sale = await commitSale(user, {
       lines,
@@ -693,10 +715,11 @@ export async function checkoutAction(input: {
       received: input.received,
       reference: input.reference,
       patientId: patient?.id,
-      ownerId: patient?.ownerId,
+      ownerId,
       veterinarianId: user.role === "VET" || user.role === "SUPER_ADMIN" ? user.id : null,
     });
-    redirect(`/receipts/${sale.id}?auto=1`);
+    revalidatePath("/pos");
+    return { ok: true as const, saleId: sale.id, receiptNumber: sale.receiptNumber };
   } catch (error) {
     bubble(error);
     return { ok: false as const, error: error instanceof Error ? error.message : "Payment was not completed." };
@@ -787,10 +810,10 @@ export async function receiveAction(formData: FormData) {
         reason: text(formData, "reason"),
       });
     }
-    redirect("/inventory");
+    redirectToPos("stock");
   } catch (error) {
     bubble(error);
-    redirect(`/inventory/receive?error=${encodeURIComponent(error instanceof Error ? error.message : "Could not receive stock")}`);
+    redirectToPos("stock", error instanceof Error ? error.message : "Could not receive stock");
   }
 }
 
@@ -810,6 +833,30 @@ export async function stockTakeAction(input: {
   } catch (error) {
     bubble(error);
     return { ok: false as const, error: error instanceof Error ? error.message : "Could not adjust stock." };
+  }
+}
+
+export async function addInventoryCategoryAction(name: string) {
+  const user = await actor();
+  try {
+    const category = await saveInventoryCategory(user, name);
+    revalidatePath("/pos");
+    return { ok: true as const, category: { value: category.name, label: category.name } };
+  } catch (error) {
+    bubble(error);
+    return { ok: false as const, error: error instanceof Error ? error.message : "Could not add the category." };
+  }
+}
+
+export async function removeInventoryCategoryAction(name: string) {
+  const user = await actor();
+  try {
+    await removeInventoryCategory(user, name);
+    revalidatePath("/pos");
+    return { ok: true as const };
+  } catch (error) {
+    bubble(error);
+    return { ok: false as const, error: error instanceof Error ? error.message : "Could not remove the category." };
   }
 }
 
@@ -910,10 +957,10 @@ export async function saveUserAction(formData: FormData) {
       registrationNumber: text(formData, "registrationNumber"),
       active: formData.get("active") === "on",
     });
-    redirect("/admin/staff");
+    redirectToPos("users");
   } catch (error) {
     bubble(error);
-    redirect(`/admin/staff?error=${encodeURIComponent(error instanceof Error ? error.message : "Could not save staff")}`);
+    redirectToPos("users", error instanceof Error ? error.message : "Could not save staff");
   }
 }
 
@@ -930,10 +977,10 @@ export async function saveSettingsAction(formData: FormData) {
       lockTimeoutMinutes: num(formData, "lockTimeoutMinutes") ?? 5,
       receiptFooter: text(formData, "receiptFooter"),
     });
-    redirect("/admin/settings?saved=1");
+    redirectToPos("settings");
   } catch (error) {
     bubble(error);
-    redirect(`/admin/settings?error=${encodeURIComponent(error instanceof Error ? error.message : "Could not save")}`);
+    redirectToPos("settings", error instanceof Error ? error.message : "Could not save");
   }
 }
 
@@ -984,10 +1031,10 @@ export async function saveServiceAction(formData: FormData) {
       notes: text(formData, "notes"),
       medicationId: text(formData, "medicationId") || undefined,
     });
-    redirect("/admin/services");
+    redirectToPos("stock");
   } catch (error) {
     bubble(error);
-    redirect(`/admin/services?error=${encodeURIComponent(error instanceof Error ? error.message : "Could not save")}`);
+    redirectToPos("stock", error instanceof Error ? error.message : "Could not save");
   }
 }
 
@@ -1007,10 +1054,10 @@ export async function saveProductAction(formData: FormData) {
       supplierId: text(formData, "supplierId"),
       active: formData.get("active") === "on",
     });
-    redirect("/admin/products");
+    redirectToPos("stock");
   } catch (error) {
     bubble(error);
-    redirect(`/admin/products?error=${encodeURIComponent(error instanceof Error ? error.message : "Could not save")}`);
+    redirectToPos("stock", error instanceof Error ? error.message : "Could not save");
   }
 }
 
@@ -1018,6 +1065,7 @@ export async function saveMedicationAction(formData: FormData) {
   const user = await actor();
   try {
     await saveMedication(user, {
+      id: text(formData, "id") || undefined,
       name: text(formData, "name"),
       genericName: text(formData, "genericName"),
       category: text(formData, "category"),
@@ -1033,10 +1081,10 @@ export async function saveMedicationAction(formData: FormData) {
       prescriptionRequired: formData.get("prescriptionRequired") === "on",
       active: formData.get("active") === "on",
     });
-    redirect("/admin/pharmacy");
+    redirectToPos("stock");
   } catch (error) {
     bubble(error);
-    redirect(`/admin/pharmacy?error=${encodeURIComponent(error instanceof Error ? error.message : "Could not save")}`);
+    redirectToPos("stock", error instanceof Error ? error.message : "Could not save");
   }
 }
 

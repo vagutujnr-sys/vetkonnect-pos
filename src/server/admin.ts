@@ -8,6 +8,16 @@ function org(actor: Actor) {
   return { organizationId: actor.organizationId, branchId: actor.branchId };
 }
 
+async function ensureInventoryCategory(actor: Actor, rawName: string) {
+  const name = rawName.trim();
+  if (!name) throw new Error("Choose a stock category.");
+  const { error } = await supabaseAdmin().from("inventory_categories").insert(toDatabase({
+    id: id(), ...org(actor), name,
+  }) as never);
+  if (error?.code === "23505") return;
+  throwDatabaseError(error);
+}
+
 export async function saveUser(
   actor: Actor,
   input: {
@@ -184,9 +194,14 @@ export async function saveProduct(
   },
 ) {
   if (actor.role !== "SUPER_ADMIN" && actor.role !== "ADMIN") throw new Error("You cannot edit products.");
+  const name = input.name.trim();
+  if (!name) throw new Error("Enter a stock item name.");
+  await ensureInventoryCategory(actor, input.category);
+  const sku = input.id ? input.sku.trim() : `VK-${id().toUpperCase()}`;
+  if (!sku) throw new Error("This stock item is missing its generated SKU. Refresh and try again.");
   const values = {
     ...(input.id ? {} : { id: id(), ...org(actor) }),
-    sku: input.sku.trim(), barcode: input.barcode?.trim() || null, name: input.name.trim(),
+    sku, barcode: input.barcode?.trim() || null, name,
     brand: input.brand?.trim() || null, category: input.category, costPrice: input.costPrice,
     sellingPrice: input.sellingPrice, reorderLevel: input.reorderLevel, supplierId: input.supplierId || null,
     active: input.active,
@@ -195,6 +210,38 @@ export async function saveProduct(
   throwDatabaseError(error);
   const product = fromDatabase<{ id: string }>(data);
   return product;
+}
+
+export async function saveInventoryCategory(actor: Actor, rawName: string) {
+  if (actor.role !== "SUPER_ADMIN") throw new Error("Only a Super Admin can manage stock categories.");
+  const name = rawName.trim();
+  if (name.length < 2 || name.length > 40) throw new Error("Category names must be between 2 and 40 characters.");
+  const { data, error } = await supabaseAdmin().from("inventory_categories").insert(toDatabase({
+    id: id(), ...org(actor), name,
+  }) as never).select("id,name").single();
+  if (error?.code === "23505") throw new Error("That category already exists.");
+  throwDatabaseError(error);
+  return fromDatabase<{ id: string; name: string }>(data);
+}
+
+export async function removeInventoryCategory(actor: Actor, rawName: string) {
+  if (actor.role !== "SUPER_ADMIN") throw new Error("Only a Super Admin can manage stock categories.");
+  const name = rawName.trim();
+  if (!name) throw new Error("Choose a category to remove.");
+  const client = supabaseAdmin();
+  const [products, medications] = await Promise.all([
+    client.from("products").select("id").eq("organization_id", actor.organizationId).eq("category", name).limit(1),
+    client.from("medications").select("id").eq("organization_id", actor.organizationId).eq("category", name).limit(1),
+  ]);
+  throwDatabaseError(products.error);
+  throwDatabaseError(medications.error);
+  if (products.data?.length || medications.data?.length) {
+    throw new Error("This category is assigned to stock items. Move those items to another category before removing it.");
+  }
+  const { data, error } = await client.from("inventory_categories").delete()
+    .eq("organization_id", actor.organizationId).eq("name", name).select("id").maybeSingle();
+  throwDatabaseError(error);
+  if (!data) throw new Error("Category not found.");
 }
 
 export async function saveMedication(
@@ -206,6 +253,7 @@ export async function saveMedication(
   },
 ) {
   if (actor.role !== "SUPER_ADMIN" && actor.role !== "VET") throw new Error("You cannot edit medicines.");
+  await ensureInventoryCategory(actor, input.category);
   const values = {
     ...(input.id ? {} : { id: id(), ...org(actor) }),
     name: input.name.trim(), genericName: input.genericName?.trim() || null,

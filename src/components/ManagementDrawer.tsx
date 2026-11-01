@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useMemo, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { Boxes, PawPrint, Settings, UsersRound, X } from "lucide-react";
-import { PRODUCT_CATEGORIES, SEXES, SPECIES } from "@/lib/constants";
+import { Boxes, PawPrint, Plus, Settings, Tags, Trash2, UsersRound, X } from "lucide-react";
+import { addInventoryCategoryAction, removeInventoryCategoryAction } from "@/server/actions";
+import { SEXES, SPECIES } from "@/lib/constants";
 import { formatMoney } from "@/lib/money";
 import { IntegrationIdField } from "./IntegrationIdField";
 import {
@@ -26,6 +27,19 @@ type PosItem = {
   price: number;
   detail?: string;
   category?: string;
+  sku?: string;
+  barcode?: string | null;
+  brand?: string | null;
+  costPrice?: number;
+  reorderLevel?: number;
+  supplierId?: string | null;
+  genericName?: string | null;
+  manufacturer?: string | null;
+  formulation?: string | null;
+  strength?: string | null;
+  unit?: string;
+  packSize?: string | null;
+  prescriptionRequired?: boolean;
   stockOnHand?: number;
   batches?: { id: string; batchNumber: string; onHand: number }[];
 };
@@ -34,6 +48,8 @@ type Patient = { id: string; name: string; label: string };
 type Owner = { id: string; fullName: string; mobile: string | null };
 type Staff = { id: string; name: string; role: string; active: boolean };
 type Supplier = { id: string; name: string };
+type Category = { value: string; label: string };
+type Subscription = { status: string; currentPeriodEnd: string | null } | null;
 type Settings = {
   clinicName: string;
   tagline: string;
@@ -45,7 +61,7 @@ type Settings = {
   lockTimeoutMinutes: number;
   receiptFooter: string | null;
 };
-type Section = "stock" | "patients" | "users" | "settings";
+type Section = "stock" | "patients" | "users" | "settings" | "categories";
 
 export function ManagementDrawer({
   open,
@@ -54,6 +70,8 @@ export function ManagementDrawer({
   onOpen,
   canManage,
   canStockTake,
+  categories,
+  subscription,
   items,
   patients,
   owners,
@@ -69,6 +87,8 @@ export function ManagementDrawer({
   onOpen: (section: Section) => void;
   canManage: boolean;
   canStockTake: boolean;
+  categories: Category[];
+  subscription: Subscription;
   items: PosItem[];
   patients: Patient[];
   owners: Owner[];
@@ -81,11 +101,16 @@ export function ManagementDrawer({
   const [patientQuery, setPatientQuery] = useState("");
   const [stockTab, setStockTab] = useState<"receive" | "count" | "catalog">("receive");
   const [catalogType, setCatalogType] = useState<"medication" | "product" | "service">("product");
+  const [editingItem, setEditingItem] = useState<PosItem | null>(null);
   const [countItem, setCountItem] = useState("");
   const [countActual, setCountActual] = useState("");
   const [countError, setCountError] = useState("");
   const [countSaved, setCountSaved] = useState("");
   const [countBusy, setCountBusy] = useState(false);
+  const [categoryName, setCategoryName] = useState("");
+  const [categoryError, setCategoryError] = useState("");
+  const [categoryMessage, setCategoryMessage] = useState("");
+  const [categoryBusy, setCategoryBusy] = useState(false);
   const router = useRouter();
   const filteredPatients = useMemo(() => {
     const query = patientQuery.trim().toLowerCase();
@@ -95,10 +120,11 @@ export function ManagementDrawer({
   if (!open) return null;
 
   const title = {
-    stock: "Stock & catalogue",
+    stock: "Stock management",
     patients: "Kennel management",
     users: "Staff access",
     settings: "Practice settings",
+    categories: "Stock categories",
   }[section];
 
   return (
@@ -111,8 +137,20 @@ export function ManagementDrawer({
           </div>
           <button type="button" className="management-close" aria-label="Close management drawer" onClick={onClose}><X size={20} /></button>
         </header>
+        <section className="management-subscription" aria-label="Practice subscription">
+          <span className="management-subscription-icon"><Tags size={17} /></span>
+          <span className="management-subscription-copy">
+            <strong>Practice plan · $5 / month</strong>
+            <small>
+              {subscription
+                ? `${subscription.status.replace(/_/g, " ")}${subscription.currentPeriodEnd ? ` · Expires ${new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(subscription.currentPeriodEnd))}` : ""}`
+                : "Subscription details unavailable"}
+            </small>
+          </span>
+        </section>
         <nav className="management-tabs" aria-label="Management sections">
           <button type="button" className={section === "stock" ? "active" : ""} onClick={() => onOpen("stock")}><Boxes size={16} />Stock</button>
+          {canManage ? <button type="button" className={section === "categories" ? "active" : ""} onClick={() => onOpen("categories")}><Tags size={16} />Categories</button> : null}
           <button type="button" className={section === "patients" ? "active" : ""} onClick={() => onOpen("patients")}><PawPrint size={16} />Kennel</button>
           <button type="button" className={section === "users" ? "active" : ""} onClick={() => onOpen("users")}><UsersRound size={16} />Staff</button>
           <button type="button" className={section === "settings" ? "active" : ""} onClick={() => onOpen("settings")}><Settings size={16} />Settings</button>
@@ -128,9 +166,9 @@ export function ManagementDrawer({
           {section === "stock" ? (
             <section>
               <div className="management-subtabs">
-                <button type="button" className={stockTab === "receive" ? "active" : ""} onClick={() => setStockTab("receive")}>Stock on hand</button>
-                <button type="button" className={stockTab === "count" ? "active" : ""} onClick={() => setStockTab("count")}>Count stock</button>
-                <button type="button" className={stockTab === "catalog" ? "active" : ""} onClick={() => setStockTab("catalog")}>Add catalogue item</button>
+                <button type="button" className={stockTab === "receive" ? "active" : ""} onClick={() => { setEditingItem(null); setStockTab("receive"); }}>Stock on hand</button>
+                <button type="button" className={stockTab === "count" ? "active" : ""} onClick={() => { setEditingItem(null); setStockTab("count"); }}>Count stock</button>
+                <button type="button" className={stockTab === "catalog" ? "active" : ""} onClick={() => { setEditingItem(null); setStockTab("catalog"); }}>Add stock item</button>
               </div>
               {stockTab === "receive" ? (
                 <>
@@ -138,7 +176,14 @@ export function ManagementDrawer({
                     {items.filter((item) => item.itemType !== "SERVICE").map((item) => (
                       <div className="management-row" key={item.key}>
                         <span><strong>{item.name}</strong><small>{item.detail || item.category}</small></span>
-                        <b>{formatMoney(item.price)}</b>
+                        <span className="management-row-actions">
+                          <b>{formatMoney(item.price)}</b>
+                          {canManage ? <button type="button" className="management-edit-button" onClick={() => {
+                            setEditingItem(item);
+                            setCatalogType(item.itemType === "MEDICATION" ? "medication" : "product");
+                            setStockTab("catalog");
+                          }}>Edit</button> : null}
+                        </span>
                       </div>
                     ))}
                     {!items.some((item) => item.itemType !== "SERVICE") ? <p className="management-empty">No stock items in the catalogue yet.</p> : null}
@@ -148,6 +193,7 @@ export function ManagementDrawer({
                     <div className="management-form-stack">
                       <form action={receiveAction} className="management-form">
                         <input type="hidden" name="kind" value="MEDICATION" />
+                        <input type="hidden" name="returnTo" value="pos" />
                         <strong>Medicine batch</strong>
                         <label className="field"><span>Medicine</span><select name="medicationId" required defaultValue=""><option value="" disabled>Select medicine</option>{items.filter((item) => item.itemType === "MEDICATION").map((item) => <option key={item.key} value={item.itemId}>{item.name}</option>)}</select></label>
                         <div className="grid-2">
@@ -163,6 +209,7 @@ export function ManagementDrawer({
                       </form>
                       <form action={receiveAction} className="management-form">
                         <input type="hidden" name="kind" value="PRODUCT" />
+                        <input type="hidden" name="returnTo" value="pos" />
                         <strong>Food or accessories</strong>
                         <label className="field"><span>Product</span><select name="productId" required defaultValue=""><option value="" disabled>Select product</option>{items.filter((item) => item.itemType === "PRODUCT").map((item) => <option key={item.key} value={item.itemId}>{item.name}</option>)}</select></label>
                         <div className="grid-2">
@@ -231,52 +278,75 @@ export function ManagementDrawer({
               ) : (
                 <>
                   <div className="management-subtabs">
-                    <button type="button" className={catalogType === "medication" ? "active" : ""} onClick={() => setCatalogType("medication")}>Medicine</button>
-                    <button type="button" className={catalogType === "product" ? "active" : ""} onClick={() => setCatalogType("product")}>Food / accessory</button>
-                    <button type="button" className={catalogType === "service" ? "active" : ""} onClick={() => setCatalogType("service")}>Service</button>
+                    <button type="button" className={catalogType === "medication" ? "active" : ""} onClick={() => { setEditingItem(null); setCatalogType("medication"); }}>Medicine</button>
+                    <button type="button" className={catalogType === "product" ? "active" : ""} onClick={() => { setEditingItem(null); setCatalogType("product"); }}>Product</button>
+                    <button type="button" className={catalogType === "service" ? "active" : ""} onClick={() => { setEditingItem(null); setCatalogType("service"); }}>Service</button>
                   </div>
-                  {!canManage ? <p className="management-empty">Only a Super Admin can change catalogue items.</p> : null}
+                  {editingItem ? <p className="management-empty">Editing {editingItem.name}. Update its details and save to stay on the POS.</p> : null}
+                  {!canManage ? <p className="management-empty">Only a Super Admin can change stock items.</p> : null}
                   {canManage && catalogType === "medication" ? (
                     <form action={saveMedicationAction} className="management-form">
+                      <input type="hidden" name="returnTo" value="pos" />
+                      {editingItem?.itemType === "MEDICATION" ? <input type="hidden" name="id" value={editingItem.itemId} /> : null}
                       <input type="hidden" name="active" value="on" />
-                      <label className="field"><span>Medicine name</span><input name="name" required /></label>
+                      <label className="field"><span>Medicine name</span><input name="name" defaultValue={editingItem?.itemType === "MEDICATION" ? editingItem.name : ""} required /></label>
                       <div className="grid-2">
-                        <label className="field"><span>Category</span><input name="category" required /></label>
-                        <label className="field"><span>Strength</span><input name="strength" /></label>
+                        <label className="field"><span>Category</span><select name="category" defaultValue={editingItem?.itemType === "MEDICATION" ? editingItem.category : categories[0]?.value ?? ""} required disabled={!categories.length}>
+                          <option value="" disabled>{categories.length ? "Select category" : "Add a category first"}</option>
+                          {categories.map((category) => <option key={category.value} value={category.value}>{category.label}</option>)}
+                        </select></label>
+                        <label className="field"><span>Strength</span><input name="strength" defaultValue={editingItem?.itemType === "MEDICATION" ? editingItem.strength ?? "" : ""} /></label>
                       </div>
                       <div className="grid-2">
-                        <label className="field"><span>Unit</span><input name="unit" defaultValue="dose" required /></label>
-                        <label className="field"><span>Selling price</span><input name="sellingPrice" type="number" min="0" step="0.01" required /></label>
+                        <label className="field"><span>Generic name</span><input name="genericName" defaultValue={editingItem?.itemType === "MEDICATION" ? editingItem.genericName ?? "" : ""} /></label>
+                        <label className="field"><span>Manufacturer</span><input name="manufacturer" defaultValue={editingItem?.itemType === "MEDICATION" ? editingItem.manufacturer ?? "" : ""} /></label>
                       </div>
                       <div className="grid-2">
-                        <label className="field"><span>Cost price</span><input name="costPrice" type="number" min="0" step="0.01" required /></label>
-                        <label className="field"><span>Reorder level</span><input name="reorderLevel" type="number" min="0" step="any" defaultValue="0" required /></label>
+                        <label className="field"><span>Formulation</span><input name="formulation" defaultValue={editingItem?.itemType === "MEDICATION" ? editingItem.formulation ?? "" : ""} /></label>
+                        <label className="field"><span>Pack size</span><input name="packSize" defaultValue={editingItem?.itemType === "MEDICATION" ? editingItem.packSize ?? "" : ""} /></label>
                       </div>
-                      <label className="field"><span>Supplier</span><select name="supplierId" defaultValue=""><option value="">No supplier</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></label>
-                      <button className="btn btn-primary" type="submit">Add medicine</button>
+                      <div className="grid-2">
+                        <label className="field"><span>Unit</span><input name="unit" defaultValue={editingItem?.itemType === "MEDICATION" ? editingItem.unit : "dose"} required /></label>
+                        <label className="field"><span>Selling price</span><input name="sellingPrice" type="number" min="0" step="0.01" defaultValue={editingItem?.itemType === "MEDICATION" ? editingItem.price : ""} required /></label>
+                      </div>
+                      <div className="grid-2">
+                        <label className="field"><span>Cost price</span><input name="costPrice" type="number" min="0" step="0.01" defaultValue={editingItem?.itemType === "MEDICATION" ? editingItem.costPrice : ""} required /></label>
+                        <label className="field"><span>Reorder level</span><input name="reorderLevel" type="number" min="0" step="any" defaultValue={editingItem?.itemType === "MEDICATION" ? editingItem.reorderLevel : 0} required /></label>
+                      </div>
+                      <label className="field"><span>Supplier</span><select name="supplierId" defaultValue={editingItem?.itemType === "MEDICATION" ? editingItem.supplierId ?? "" : ""}><option value="">No supplier</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></label>
+                      <label className="management-checkbox"><input type="checkbox" name="prescriptionRequired" defaultChecked={editingItem?.itemType === "MEDICATION" ? editingItem.prescriptionRequired : false} />Prescription required</label>
+                      <button className="btn btn-primary" type="submit" disabled={!categories.length}>{editingItem?.itemType === "MEDICATION" ? "Save medicine" : "Add medicine"}</button>
                     </form>
                   ) : null}
                   {canManage && catalogType === "product" ? (
                     <form action={saveProductAction} className="management-form">
+                      <input type="hidden" name="returnTo" value="pos" />
+                      <input type="hidden" name="id" value={editingItem?.itemType === "PRODUCT" ? editingItem.itemId : ""} />
+                      <input type="hidden" name="sku" value={editingItem?.itemType === "PRODUCT" ? editingItem.sku ?? "" : ""} />
+                      <input type="hidden" name="barcode" value={editingItem?.itemType === "PRODUCT" ? editingItem.barcode ?? "" : ""} />
+                      <input type="hidden" name="brand" value={editingItem?.itemType === "PRODUCT" ? editingItem.brand ?? "" : ""} />
                       <input type="hidden" name="active" value="on" />
-                      <label className="field"><span>Product name</span><input name="name" required /></label>
+                      <label className="field"><span>Product name</span><input name="name" defaultValue={editingItem?.itemType === "PRODUCT" ? editingItem.name : ""} required /></label>
                       <div className="grid-2">
-                        <label className="field"><span>SKU</span><input name="sku" /></label>
-                        <label className="field"><span>Category</span><select name="category">{PRODUCT_CATEGORIES.map((category) => <option key={category.id} value={category.id}>{category.label}</option>)}</select></label>
+                        <label className="field"><span>Category</span><select name="category" defaultValue={editingItem?.itemType === "PRODUCT" ? editingItem.category : categories[0]?.value ?? ""} required disabled={!categories.length}>
+                          <option value="" disabled>{categories.length ? "Select category" : "Add a category first"}</option>
+                          {categories.map((category) => <option key={category.value} value={category.value}>{category.label}</option>)}
+                        </select></label>
                       </div>
                       <div className="grid-2">
-                        <label className="field"><span>Cost price</span><input name="costPrice" type="number" min="0" step="0.01" required /></label>
-                        <label className="field"><span>Selling price</span><input name="sellingPrice" type="number" min="0" step="0.01" required /></label>
+                        <label className="field"><span>Cost price</span><input name="costPrice" type="number" min="0" step="0.01" defaultValue={editingItem?.itemType === "PRODUCT" ? editingItem.costPrice : ""} required /></label>
+                        <label className="field"><span>Selling price</span><input name="sellingPrice" type="number" min="0" step="0.01" defaultValue={editingItem?.itemType === "PRODUCT" ? editingItem.price : ""} required /></label>
                       </div>
                       <div className="grid-2">
-                        <label className="field"><span>Reorder level</span><input name="reorderLevel" type="number" min="0" step="any" defaultValue="0" required /></label>
-                        <label className="field"><span>Supplier</span><select name="supplierId" defaultValue=""><option value="">No supplier</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></label>
+                        <label className="field"><span>Reorder level</span><input name="reorderLevel" type="number" min="0" step="any" defaultValue={editingItem?.itemType === "PRODUCT" ? editingItem.reorderLevel : 0} required /></label>
+                        <label className="field"><span>Supplier</span><select name="supplierId" defaultValue={editingItem?.itemType === "PRODUCT" ? editingItem.supplierId ?? "" : ""}><option value="">No supplier</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></label>
                       </div>
-                      <button className="btn btn-primary" type="submit">Add product</button>
+                      <button className="btn btn-primary" type="submit" disabled={!categories.length}>{editingItem?.itemType === "PRODUCT" ? "Save stock item" : "Add stock item"}</button>
                     </form>
                   ) : null}
                   {canManage && catalogType === "service" ? (
                     <form action={saveServiceAction} className="management-form">
+                      <input type="hidden" name="returnTo" value="pos" />
                       <label className="field"><span>Service name</span><input name="name" required /></label>
                       <div className="grid-2">
                         <label className="field"><span>Category</span><input name="category" defaultValue="General" /></label>
@@ -302,6 +372,7 @@ export function ManagementDrawer({
               <details className="management-form-disclosure">
                 <summary>Register a patient</summary>
                 <form action={createPatientAction} className="management-form">
+                  <input type="hidden" name="returnTo" value="pos" />
                   <label className="field"><span>Existing owner (optional)</span><select name="ownerId" defaultValue=""><option value="">Create new owner below</option>{owners.map((owner) => <option key={owner.id} value={owner.id}>{owner.fullName}{owner.mobile ? ` · ${owner.mobile}` : ""}</option>)}</select></label>
                   <div className="grid-2">
                     <label className="field"><span>Owner name</span><input name="ownerName" /></label>
@@ -333,6 +404,7 @@ export function ManagementDrawer({
                   <details className="management-form-disclosure" open>
                     <summary>Add staff member</summary>
                     <form action={saveUserAction} className="management-form">
+                      <input type="hidden" name="returnTo" value="pos" />
                       <label className="field"><span>Name</span><input name="name" required minLength={2} /></label>
                       <div className="grid-2">
                         <label className="field"><span>Role</span><select name="role"><option value="VET">Veterinarian</option><option value="ADMIN">General staff</option></select></label>
@@ -352,6 +424,7 @@ export function ManagementDrawer({
             <section>
               {!canManage ? <p className="management-empty">Only a Super Admin can change practice settings.</p> : !settings ? <p className="management-empty">Practice settings are unavailable.</p> : (
                 <form action={saveSettingsAction} className="management-form">
+                  <input type="hidden" name="returnTo" value="pos" />
                   <IntegrationIdField integrationId={settings.integrationId} />
                   <label className="field"><span>Practice name</span><input name="clinicName" defaultValue={settings.clinicName} required /></label>
                   <label className="field"><span>Tagline</span><input name="tagline" defaultValue={settings.tagline} /></label>
@@ -372,6 +445,63 @@ export function ManagementDrawer({
                   <button className="btn btn-primary" type="submit">Save settings</button>
                 </form>
               )}
+            </section>
+          ) : null}
+
+          {section === "categories" ? (
+            <section>
+              <p className="management-empty">Categories organize medicine and product filters on the POS. A category in use cannot be removed.</p>
+              {categoryError ? <p className="management-inline-error" role="alert">{categoryError}</p> : null}
+              {categoryMessage ? <p className="management-inline-success" role="status">{categoryMessage}</p> : null}
+              <form className="management-form category-add-form" onSubmit={async (event: FormEvent<HTMLFormElement>) => {
+                event.preventDefault();
+                setCategoryError("");
+                setCategoryMessage("");
+                setCategoryBusy(true);
+                try {
+                  const result = await addInventoryCategoryAction(categoryName);
+                  if (!result.ok) {
+                    setCategoryError(result.error);
+                    return;
+                  }
+                  setCategoryName("");
+                  setCategoryMessage(`${result.category.label} added.`);
+                  router.refresh();
+                } catch (error) {
+                  setCategoryError(error instanceof Error ? error.message : "Could not add the category.");
+                } finally {
+                  setCategoryBusy(false);
+                }
+              }}>
+                <label className="field"><span>New category</span><input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} minLength={2} maxLength={40} required placeholder="e.g. Bird food" /></label>
+                <button className="btn btn-primary" type="submit" disabled={categoryBusy}><Plus size={17} />{categoryBusy ? "Adding…" : "Add category"}</button>
+              </form>
+              <div className="management-list">
+                {categories.map((category) => (
+                  <div className="management-row" key={category.value}>
+                    <span><strong>{category.label}</strong><small>POS category</small></span>
+                    <button type="button" className="management-remove-button" disabled={categoryBusy} aria-label={`Remove ${category.label}`} onClick={async () => {
+                      setCategoryError("");
+                      setCategoryMessage("");
+                      setCategoryBusy(true);
+                      try {
+                        const result = await removeInventoryCategoryAction(category.value);
+                        if (!result.ok) {
+                          setCategoryError(result.error);
+                          return;
+                        }
+                        setCategoryMessage(`${category.label} removed.`);
+                        router.refresh();
+                      } catch (error) {
+                        setCategoryError(error instanceof Error ? error.message : "Could not remove the category.");
+                      } finally {
+                        setCategoryBusy(false);
+                      }
+                    }}><Trash2 size={16} /><span>Remove</span></button>
+                  </div>
+                ))}
+                {!categories.length ? <p className="management-empty">No categories yet. Add one above.</p> : null}
+              </div>
             </section>
           ) : null}
         </div>
