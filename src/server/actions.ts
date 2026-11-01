@@ -117,7 +117,7 @@ export async function loginWithPin(pin: string, practiceCode: string) {
     entity: "User",
     entityId: user.id,
   });
-  redirect(user.role === "PLATFORM_ADMIN" ? "/platform" : user.role === "SUPER_ADMIN" ? "/admin" : "/home");
+  redirect(user.role === "PLATFORM_ADMIN" ? "/platform" : "/pos");
 }
 
 export async function loginPlatformAdmin(formData: FormData) {
