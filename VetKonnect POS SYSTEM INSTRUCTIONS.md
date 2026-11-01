@@ -58,10 +58,10 @@ Use:
 - Secure PIN hashing
 - Proper database transactions
 
-Run the application at its configured deployment URL. Do not add Prisma,
-SQLite, or another local database. General patient, clinical, inventory, and
-administrative features require connectivity; only the agreed POS workflow
-uses browser-local data while offline.
+Run the application at its configured deployment URL. Supabase is the sole
+database; do not introduce a local database. General patient, clinical,
+inventory, and administrative features require connectivity; only the agreed
+POS workflow uses browser-local data while offline.
 
 ---
 
