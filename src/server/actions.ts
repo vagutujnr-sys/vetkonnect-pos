@@ -47,7 +47,12 @@ import { appUrl } from "@/lib/app-url";
 import { getPaynow } from "@/lib/paynow";
 import { hashVoucherCode, isValidVoucherCode, normalizeVoucherCode } from "@/lib/vouchers";
 import { removeClinicLogo, uploadClinicLogo, uploadPatientPhoto } from "@/lib/supabase-storage";
-import { createRegistrationIntent, deleteRegistrationIntent, updateRegistrationIntentPollUrl } from "./billing-db";
+import {
+  completePracticeRegistration,
+  createRegistrationIntent,
+  deleteRegistrationIntent,
+  updateRegistrationIntentPollUrl,
+} from "./billing-db";
 
 const attempts = new Map<string, { count: number; until: number }>();
 
@@ -218,6 +223,8 @@ export async function registerPracticeAction(formData: FormData) {
   const email = text(formData, "email");
   const phone = text(formData, "phone");
   const address = text(formData, "address");
+  const paymentMethod = text(formData, "paymentMethod");
+  const voucherCode = normalizeVoucherCode(text(formData, "voucherCode"));
   const logo = formData.get("clinicLogo");
   if (
     name.length < 2 || adminName.length < 2 || !/^\S+@\S+\.\S+$/.test(email) ||
@@ -228,8 +235,17 @@ export async function registerPracticeAction(formData: FormData) {
     redirect("/register?error=Check%20the%20practice%20details%2C%20logo%2C%20email%2C%20and%204-digit%20PIN.");
   }
 
-  if (!process.env.PAYNOW_INTEGRATION_ID || !process.env.PAYNOW_INTEGRATION_KEY || !process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  if (!["PAYNOW", "VOUCHER"].includes(paymentMethod)) {
+    redirect("/register?error=Choose%20a%20valid%20payment%20method.");
+  }
+  if (paymentMethod === "VOUCHER" && !isValidVoucherCode(voucherCode)) {
+    redirect("/register?error=Enter%20a%20valid%20subscription%20voucher%20code.");
+  }
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
     redirect("/register?error=Online%20registration%20is%20not%20configured%20yet.");
+  }
+  if (paymentMethod === "PAYNOW" && (!process.env.PAYNOW_INTEGRATION_ID || !process.env.PAYNOW_INTEGRATION_KEY)) {
+    redirect("/register?error=Paynow%20is%20not%20configured%20yet.");
   }
 
   const slugBase = name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
@@ -263,8 +279,21 @@ export async function registerPracticeAction(formData: FormData) {
       address,
       pinHash: hashPin(pin),
       logoUrl,
-      paymentMethod: "PAYNOW",
+      paymentMethod,
     });
+    if (paymentMethod === "VOUCHER") {
+      const completed = await completePracticeRegistration({
+        intentId,
+        paymentMethod: "VOUCHER",
+        codeHash: hashVoucherCode(voucherCode),
+      });
+      if (!completed) {
+        await deleteRegistrationIntent(intentId);
+        await removeClinicLogo(logoPath);
+        redirect("/register?error=That%20voucher%20is%20invalid%2C%20revoked%2C%20or%20already%20used.");
+      }
+      redirect(`/register/success?reference=${encodeURIComponent(intentId)}`);
+    }
     const paynow = getPaynow(`${appUrl()}/register/success?reference=${encodeURIComponent(intentId)}`);
     const payment = paynow.createPayment(intentId, email);
     payment.add("VetKonnect P.O.S & Management monthly subscription", 5);
